@@ -80,18 +80,12 @@ const DWARF_STRENGTH_BUCKETS: [i32; 7] = [450, 950, 1150, 1250, 1350, 1550, 2250
 
 use rand::{rngs::ThreadRng, thread_rng, Rng};
 
-fn bucket_random_with_rng<T: rand::distributions::uniform::SampleUniform + PartialOrd + Copy>(
+fn bucket_random<T: rand::distributions::uniform::SampleUniform + PartialOrd + Copy>(
     arr: &[T],
     rng: &mut ThreadRng,
 ) -> T {
     let bucket = rng.gen_range(0..arr.len() - 1);
     rng.gen_range(arr[bucket]..arr[bucket + 1])
-}
-
-fn bucket_random<T: rand::distributions::uniform::SampleUniform + PartialOrd + Copy>(
-    arr: &[T],
-) -> T {
-    bucket_random_with_rng(arr, &mut thread_rng())
 }
 
 #[allow(non_snake_case)]
@@ -118,13 +112,13 @@ pub fn attack_score(
                 let Qw = QUALITY_WEAPON_MULTS[w as usize];
                 let size = 60000.0
                     * (0..3).fold(1.0, |acc, _| {
-                        acc * bucket_random_with_rng(&BODY_SIZE_BUCKETS, &mut rng)
+                        acc * bucket_random(&BODY_SIZE_BUCKETS, &mut rng)
                     });
                 let enemy_size = 60000.0
                 * (0..3).fold(1.0, |acc, _| {
-                    acc * bucket_random_with_rng(&BODY_SIZE_BUCKETS, &mut rng)
+                    acc * bucket_random(&BODY_SIZE_BUCKETS, &mut rng)
                 });
-                let strength = bucket_random_with_rng(&DWARF_STRENGTH_BUCKETS, &mut rng) as f64;
+                let strength = bucket_random(&DWARF_STRENGTH_BUCKETS, &mut rng) as f64;
                 let momentum = size * strength * attack.velocity / (10.0 * ((10000.0 + size) / weapon_weight));
                 [0.036, 0.0027].iter().filter(|&&contact_area| { // breastplate, helmet
                     let area = attack.area.min(enemy_size * contact_area);
