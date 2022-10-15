@@ -17,8 +17,10 @@ pub struct Material {
     solidDensity: f64,
     impactYield: f64,
     impactFracture: f64,
+    impactStrainAtYield: f64,
     shearYield: f64,
     shearFracture: f64,
+    shearStrainAtYield: f64,
     maxEdge: f64,
     armor: bool,
 }
@@ -65,20 +67,23 @@ fn bucket_random<T: rand::distributions::uniform::SampleUniform + PartialOrd + C
 #[allow(non_snake_case)]
 #[wasm_bindgen]
 pub fn attack_score(
-    attack_js: &JsValue,
-    weapon_mat_js: &JsValue,
-    armor_mat_js: &JsValue,
-    weapon_js: &JsValue,
-    weapon_weight: f64,
-) -> f64 {
+    attack_js: JsValue,
+    weapon_mat_js: JsValue,
+    armor_mat_js: JsValue,
+    weapon_js: JsValue,
+) -> Result<f64, JsValue> {
     utils::set_panic_hook();
-    let attack: Attack = attack_js.into_serde().unwrap();
-    let weapon_mat: Material = weapon_mat_js.into_serde().unwrap();
-    let armor_mat: Material = armor_mat_js.into_serde().unwrap();
-    let weapon: Weapon = weapon_js.into_serde().unwrap();
+    let attack: Attack = serde_wasm_bindgen::from_value(attack_js)?;
+    let weapon_mat: Material = serde_wasm_bindgen::from_value(weapon_mat_js)?;
+    let armor_mat: Material = serde_wasm_bindgen::from_value(armor_mat_js)?;
+    let weapon: Weapon = serde_wasm_bindgen::from_value(weapon_js)?;
+    let weapon_weight = weapon.size * weapon_mat.solidDensity;
+    let rSY = armor_mat.shearYield / weapon_mat.shearYield;
+    let rSF = armor_mat.shearFracture / weapon_mat.shearFracture;
+    let sharpness = weapon_mat.maxEdge / 10000.0;
     let mut trials = 0;
     let mut rng = thread_rng();
-    let successes = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6]
+    let score = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6]
         .iter()
         .map(|&a| {
             let Qa = QUALITY_ARMOR_MULTS[a as usize];
@@ -86,6 +91,7 @@ pub fn attack_score(
                 .iter()
                 .map(|&w| {
                     let Qw = QUALITY_WEAPON_MULTS[w as usize];
+                    let base_size = 60000.0;
                     let size = 60000.0
                         * (0..3).fold(1.0, |acc, _| {
                             acc * bucket_random(&BODY_SIZE_BUCKETS, &mut rng)
@@ -95,36 +101,56 @@ pub fn attack_score(
                             acc * bucket_random(&BODY_SIZE_BUCKETS, &mut rng)
                         });
                     let strength = bucket_random(&DWARF_STRENGTH_BUCKETS, &mut rng) as f64;
-                    let momentum = size * strength * attack.velocity
-                        / (10.0 * ((10000.0 + size) / weapon_weight));
-                    [0.036, 0.0027]
+                    let momentum = base_size * strength * attack.velocity
+                        / (1_000_000.0 * (1.0 + size / weapon_weight));
+                    [0.048, 0.036, 0.0162]
                         .iter()
-                        .filter(|&&contact_area| {
-                            // breastplate, helmet
+                        .map(|&contact_area| {
+                            // greaves, breastplate, helmet
                             let area = attack.area.min(enemy_size * contact_area);
+                            let mut blunted = false;
                             trials += 1;
-                            (attack.edged
-                                && momentum
-                                    >= ((armor_mat.shearYield / weapon_mat.shearYield)
-                                        + ((area + 1.0)
-                                            * (armor_mat.shearFracture
-                                                / weapon_mat.shearFracture))
-                                            * ((10.0 + 2.0 * Qa)
-                                                / (Qw * weapon_mat.maxEdge / 10000.0))))
-                                || ((2.0 * weapon.size * weapon_mat.impactYield / 1000.0
-                                    >= area * armor_mat.solidDensity)
-                                    && (momentum
-                                        >= (((2.0 * armor_mat.impactFracture) / 1000000.0
-                                            - armor_mat.impactYield / 1000000.0)
-                                            * (2.0 + 0.4 * Qa)
-                                            * area)))
+                            if attack.edged {
+                                if momentum
+                                    >= (rSY
+                                        + ((area + 1.0) * rSF)
+                                            * ((10.0 + 2.0 * Qa) / (Qw * sharpness)))
+                                {
+                                    return 1.0;
+                                }
+                                blunted = true;
+                            }
+                            if 2.0 * weapon.size * weapon_mat.impactYield / 1000.0
+                                >= area * armor_mat.solidDensity
+                            {
+                                return 0.0;
+                            } else {
+                                if momentum
+                                    >= (((2.0 * armor_mat.impactFracture) / 1000000.0
+                                        - armor_mat.impactYield / 1000000.0)
+                                        * (2.0 + 0.4 * Qa)
+                                        * area)
+                                {
+                                    if blunted {
+                                        0.95
+                                    } else {
+                                        1.0
+                                    }
+                                } else {
+                                    if attack.edged {
+                                        armor_mat.shearStrainAtYield / 50_000.0
+                                    } else {
+                                        armor_mat.impactStrainAtYield / 50_000.0
+                                    }
+                                }
+                            }
                         })
-                        .count()
+                        .sum::<f64>()
                 })
-                .sum::<usize>()
+                .sum::<f64>()
         })
-        .sum::<usize>();
-    (100.0 * successes as f64 / trials as f64).round() / 10.0
+        .sum::<f64>();
+    Ok((100.0 * score / trials as f64).round() / 10.0)
 }
 
 struct Adjacents {
@@ -181,8 +207,8 @@ pub fn fdm(arr: &[f64], width: usize) -> Box<[f64]> {
         .enumerate()
         .map(|(i, f)| {
             let (num_adj, adjacent_gas) = adjacent_tiles(i, width, arr.len())
-                .fold((0, 0.0), |acc, j| { (acc.0 + 1, acc.1 + arr[j] / 5.0) });
-            (f * (5-num_adj) as f64) / 5.0 + adjacent_gas
+                .fold((0, 0.0), |acc, j| (acc.0 + 1, acc.1 + arr[j] / 5.0));
+            (f * (5 - num_adj) as f64) / 5.0 + adjacent_gas
         })
         .collect::<Vec<f64>>()
         .into_boxed_slice()
