@@ -121,7 +121,7 @@ pub fn attack_score(
                                 blunted = true;
                             }
                             if 2.0 * weapon.size * weapon_mat.impactYield / 1000.0
-                                >= area * armor_mat.solidDensity
+                                < area * armor_mat.solidDensity
                             {
                                 return 0.0;
                             } else {
